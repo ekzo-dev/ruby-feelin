@@ -1,3 +1,3 @@
 module FEELIN
-  VERSION = "0.1.0"
+  VERSION = "4.3.0"
 end
