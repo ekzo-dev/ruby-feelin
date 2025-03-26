@@ -1,0 +1,6 @@
+.bundle/
+log/*.log
+.byebug_history
+*.gem
+Gemfile.lock
+.idea
