@@ -12,6 +12,10 @@ Gem::Specification.new do |spec|
   spec.description = "This gem uses embed V8 JavaScript engine and feelin JavaScript library to parse and evaluate DMN FEEL expressions"
   spec.license     = "MIT"
 
+  spec.metadata['homepage_uri']    = spec.homepage
+  spec.metadata['source_code_uri'] = spec.homepage
+  spec.metadata['changelog_uri']   = 'https://github.com/ekzo-dev/ruby-feelin/CHANGELOG.md'
+
   spec.files = `git ls-files -z`.split("\x0")
   spec.require_paths = ["lib"]
 
