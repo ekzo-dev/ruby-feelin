@@ -4,3 +4,7 @@ log/*.log
 *.gem
 Gemfile.lock
 .idea
+
+# JS dependencies — only needed to (re)build lib/feelin/js/dist/feelin.js,
+# which is committed. Run `npm install` in lib/feelin/js to restore.
+node_modules/

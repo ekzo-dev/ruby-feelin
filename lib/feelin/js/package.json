@@ -1,5 +1,12 @@
 {
+  "private": true,
+  "scripts": {
+    "build": "esbuild entry.js --bundle --format=iife --global-name=feel --platform=browser --outfile=dist/feelin.js"
+  },
   "dependencies": {
-    "feelin": "^4.3.0"
+    "feelin": "^7.0.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1"
   }
 }

@@ -19,7 +19,7 @@ Gem::Specification.new do |spec|
   spec.files = `git ls-files -z`.split("\x0")
   spec.require_paths = ["lib"]
 
-  spec.add_dependency "mini_racer",      "~> 0.18"
+  spec.add_dependency "mini_racer",      "~> 0.21"
 
   spec.add_development_dependency "rspec",   "3.12.0"
   spec.add_development_dependency "byebug", "11.1.3"
