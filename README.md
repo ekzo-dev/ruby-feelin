@@ -43,11 +43,11 @@ FEELIN.unary_test('[1..end]', 1, { 'end' => 10 }) # true
 
 ### Syntax tree
 
-`parse` and `parse_unary_tests` answer the syntax tree of an expression without evaluating it — for
+`parse_expression` and `parse_unary_tests` answer the syntax tree of an expression without evaluating it — for
 translating FEEL into something else (SQL, for one) or inspecting what an expression refers to.
 
 ```ruby
-FEELIN.parse('price > 10')
+FEELIN.parse_expression('price > 10')
 # { "type" => "Expression", "from" => 0, "to" => 10, "text" => "price > 10", "children" => [
 #   { "type" => "Comparison", "from" => 0, "to" => 10, "text" => "price > 10", "children" => [
 #     { "type" => "VariableName", "from" => 0, "to" => 5, "text" => "price", "children" => [
@@ -68,16 +68,28 @@ The optional second argument is a context, of which only the names matter: it is
 spaces in it be read as one name.
 
 ```ruby
-FEELIN.parse("Mike's daughter.name + 1", { "Mike's daughter.name" => nil })
+FEELIN.parse_expression("Mike's daughter.name + 1", { "Mike's daughter.name" => nil })
 ```
 
-An expression that does not parse raises `MiniRacer::RuntimeError`, with the same message `evaluate` gives.
+An expression that does not parse raises `FEELIN::SyntaxError`, with the same message `evaluate` gives.
 
 ### Custom functions
 
 ```ruby
 FEELIN.add_function('rates', proc { [10, 20] })
 FEELIN.evaluate('every rate in rates() satisfies rate < 10') # false
+```
+
+Arguments reach the function in the form a result has: a date, a time and a duration as their ISO 8601
+strings, wherever they are among the arguments. What the function returns is plain data to FEEL — an ISO
+string it returns is a string there, and `date(...)` makes a date of it.
+
+```ruby
+FEELIN.add_function('last day of month', proc do |date|
+  day = Date.iso8601(date)
+  Date.new(day.year, day.month, -1).iso8601
+end)
+FEELIN.evaluate('date(last day of month(date("2024-02-10"))) + duration("P1D")') # "2024-03-01"
 ```
 
 ### A context of one's own
@@ -91,14 +103,38 @@ context = FEELIN::Context.new(timeout: 1_000, max_memory: 64_000_000) # ms, byte
 
 context.add_function('rate', proc { 0.2 })
 context.evaluate('price * rate()', { 'price' => 100 }) # 20
-context.parse('price * rate()')
+context.parse_expression('price * rate()')
 
 context.dispose
 ```
 
-Past its timeout an evaluation raises `MiniRacer::ScriptTerminatedError`, past its memory
-`MiniRacer::V8OutOfMemoryError`. Contexts are created from one snapshot of the bundle, so a new one does
-not load feelin again.
+Past its timeout an evaluation raises `FEELIN::TimeoutError`, past its memory `FEELIN::MemoryError`.
+Contexts are created from one snapshot of the bundle, so a new one does not load feelin again.
+
+### Errors
+
+Whatever goes wrong inside V8 is raised as a `FEELIN::Error`, never as an error of MiniRacer. Its message
+names the expression, which is also there as `error.expression`; `error.reason` is what went wrong without
+it.
+
+| error | when |
+|---|---|
+| `FEELIN::SyntaxError` | the expression does not parse |
+| `FEELIN::TimeoutError` | the evaluation ran past the context's `timeout` |
+| `FEELIN::MemoryError` | the evaluation ran past the context's `max_memory` |
+| `FEELIN::Error` | anything else, and the parent of the three above |
+
+```ruby
+begin
+  FEELIN.evaluate('1 +')
+rescue FEELIN::SyntaxError => e
+  e.message    # "1 +" is not a FEEL expression: Incomplete <ArithmeticExpression>
+  e.expression # 1 +
+  e.reason     # Incomplete <ArithmeticExpression>
+end
+```
+
+An exception raised by a custom function is not wrapped: it reaches the caller as it was raised.
 
 ## Development
 

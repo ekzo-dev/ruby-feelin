@@ -9,12 +9,35 @@ module FEELIN
   # assembled at load time.
   BUNDLE_PATH = File.expand_path("feelin/js/dist/feelin.js", __dir__)
 
+  # What goes wrong inside V8 is raised as one of these, never as a MiniRacer
+  # error: the message names the expression, which is also kept in `expression`,
+  # and `reason` is what went wrong without it. An exception raised by a custom
+  # function is not one of them and passes as it is.
+  class Error < StandardError
+    attr_reader :expression, :reason
+
+    def initialize(message, expression = nil, reason = message)
+      super(message)
+      @expression = expression
+      @reason = reason
+    end
+  end
+
+  # the expression does not parse
+  class SyntaxError < Error; end
+
+  # the evaluation ran past the context's `timeout`
+  class TimeoutError < Error; end
+
+  # the evaluation ran past the context's `max_memory`
+  class MemoryError < Error; end
+
   # A V8 context with feelin loaded. The module-level methods below work on one
   # shared context without limits; a context of one's own is for an expression
   # that is not trusted to end or to stay small — `timeout` (ms) and `max_memory`
-  # (bytes) are MiniRacer's limits, and going over one raises
-  # MiniRacer::ScriptTerminatedError or MiniRacer::V8OutOfMemoryError — and for
-  # custom functions that the shared context should not see.
+  # (bytes) are its limits, and going over one raises TimeoutError or
+  # MemoryError — and for custom functions that the shared context should not
+  # see.
   #
   # Every context starts from one snapshot of the bundle, so creating one does
   # not load and compile feelin again.
@@ -33,6 +56,7 @@ module FEELIN
     end
 
     def initialize(timeout: nil, max_memory: nil)
+      @timeout = timeout
       limits = { timeout: timeout, max_memory: max_memory }.compact
       @context = MiniRacer::Context.new(snapshot: self.class.snapshot, **limits)
     end
@@ -50,8 +74,8 @@ module FEELIN
     # counted in UTF-16 code units), `text` (that span) and `children`. Tokens are
     # nodes too. The context only supplies the names of the variables, which is
     # what lets a name with spaces in it be read as one. An expression that does
-    # not parse raises, as it does in `evaluate`.
-    def parse(expression, context = nil)
+    # not parse raises SyntaxError, as it does in `evaluate`.
+    def parse_expression(expression, context = nil)
       call("parseExpression", expression, context)
     end
 
@@ -70,8 +94,24 @@ module FEELIN
 
     private
 
+    SYNTAX_ERROR = /\AFeelSyntaxError: /
+
     def call(function, expression, context)
       JSON.parse(@context.call("feel.json.#{function}", expression, context.nil? ? nil : JSON.generate(context)))
+    rescue MiniRacer::ScriptTerminatedError
+      raise failure(TimeoutError, expression, "took longer than #{@timeout} ms", "")
+    rescue MiniRacer::V8OutOfMemoryError
+      raise failure(MemoryError, expression, "ran out of memory", "")
+    rescue MiniRacer::Error => e
+      reason = e.message.lines.first.to_s.strip
+
+      raise failure(SyntaxError, expression, reason.sub(SYNTAX_ERROR, ''), " is not a FEEL expression:") if reason.match?(SYNTAX_ERROR)
+
+      raise failure(Error, expression, reason.sub(/\AError: /, ''), ":")
+    end
+
+    def failure(error, expression, reason, link)
+      error.new("#{expression.inspect}#{link} #{reason}", expression, reason)
     end
   end
 
@@ -84,8 +124,8 @@ module FEELIN
       shared.unary_test(expression, value, context)
     end
 
-    def parse(expression, context = nil)
-      shared.parse(expression, context)
+    def parse_expression(expression, context = nil)
+      shared.parse_expression(expression, context)
     end
 
     def parse_unary_tests(expression, context = nil)

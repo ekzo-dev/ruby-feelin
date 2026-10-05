@@ -36,6 +36,26 @@ RSpec.describe FEELIN do
     end
   end
 
+  describe "custom function arguments" do
+    it "passes a date, a time and a duration as their ISO 8601 strings" do
+      seen = nil
+      FEELIN.add_function('seen', proc { |*args| seen = args; nil })
+
+      FEELIN.evaluate('seen(date("2020-01-02"), time("10:00:00+03:00"), date and time("2020-01-02T03:04:05Z"), duration("P1DT2H"))')
+
+      expect(seen).to eq [ '2020-01-02', '10:00:00+03:00', '2020-01-02T03:04:05Z', 'P1DT2H' ]
+    end
+
+    it "does so inside a list and a context, and leaves the rest as it is" do
+      seen = nil
+      FEELIN.add_function('seen', proc { |*args| seen = args; nil })
+
+      FEELIN.evaluate('seen([ @"2020-01-02" ], { on: @"2020-01-03", n: 1.5 }, "text", null, true)')
+
+      expect(seen).to eq [ [ '2020-01-02' ], { 'on' => '2020-01-03', 'n' => 1.5 }, 'text', nil, true ]
+    end
+  end
+
   describe "temporal results" do
     it "answers a date, a time and a duration in their ISO 8601 form" do
       expect(FEELIN.evaluate('date("2020-01-02")')).to eq '2020-01-02'
@@ -70,7 +90,7 @@ RSpec.describe FEELIN do
       context = FEELIN::Context.new(timeout: 50)
 
       expect { context.evaluate('count(for a in 1..3000, b in 1..3000 return a * b)') }
-        .to raise_error(MiniRacer::ScriptTerminatedError)
+        .to raise_error(FEELIN::TimeoutError, /took longer than 50 ms/)
     ensure
       context&.dispose
     end
@@ -89,13 +109,35 @@ RSpec.describe FEELIN do
     end
   end
 
-  describe "syntax errors" do
-    it "raises on an expression that does not parse" do
-      expect { FEELIN.evaluate('1 +') }.to raise_error(MiniRacer::RuntimeError, /Incomplete <ArithmeticExpression>/)
+  describe "errors" do
+    it "raises a syntax error that names the expression" do
+      expect { FEELIN.evaluate('1 +') }.to raise_error(FEELIN::SyntaxError, '"1 +" is not a FEEL expression: Incomplete <ArithmeticExpression>') do |error|
+        expect(error.expression).to eq '1 +'
+        expect(error.reason).to eq 'Incomplete <ArithmeticExpression>'
+      end
+      expect { FEELIN.unary_test('[1..', 1) }.to raise_error(FEELIN::SyntaxError)
+    end
+
+    it "raises nothing of MiniRacer's" do
+      expect { FEELIN.evaluate('1 +') }.to raise_error(FEELIN::Error) { |error| expect(error).not_to be_a(MiniRacer::Error) }
+    end
+
+    it "raises a memory error past the context's limit" do
+      context = FEELIN::Context.new(max_memory: 4_000_000)
+
+      expect { context.evaluate('for a in 1..300000 return { n: a, s: string(a) }') }.to raise_error(FEELIN::MemoryError, /ran out of memory/)
+    ensure
+      context&.dispose
+    end
+
+    it "lets an exception of a custom function through as it is" do
+      FEELIN.add_function('fails', proc { raise ArgumentError, 'no' })
+
+      expect { FEELIN.evaluate('fails()') }.to raise_error(ArgumentError, 'no')
     end
   end
 
-  describe "#parse" do
+  describe "#parse_expression" do
     # the types of a tree, nested as the tree is, tokens left out
     def shape(node)
       children = node['children'].reject { |child| child['children'].empty? && child['type'] !~ /\A[A-Z]/ }
@@ -103,7 +145,7 @@ RSpec.describe FEELIN do
     end
 
     it "answers the syntax tree without evaluating the expression" do
-      tree = FEELIN.parse('a.b + 1 > 2')
+      tree = FEELIN.parse_expression('a.b + 1 > 2')
 
       expect(shape(tree)).to eq(
         'Expression' => [ {
@@ -121,33 +163,33 @@ RSpec.describe FEELIN do
     end
 
     it "gives every node its span and its text" do
-      comparison = FEELIN.parse('a.b + 1 > 2')['children'].first
+      comparison = FEELIN.parse_expression('a.b + 1 > 2')['children'].first
 
       expect(comparison.slice('type', 'from', 'to', 'text')).to eq('type' => 'Comparison', 'from' => 0, 'to' => 11, 'text' => 'a.b + 1 > 2')
       expect(comparison['children'].map { |child| child['text'] }).to eq [ 'a.b + 1', '>', '2' ]
     end
 
     it "reads a name with spaces as one name when the context has it" do
-      tree = FEELIN.parse("Mike's daughter.name + 1", { "Mike's daughter.name" => 'Lisa' })
+      tree = FEELIN.parse_expression("Mike's daughter.name + 1", { "Mike's daughter.name" => 'Lisa' })
       name = tree['children'].first['children'].first
 
       expect(name.slice('type', 'text')).to eq('type' => 'VariableName', 'text' => "Mike's daughter.name")
     end
 
-    it "raises on an expression that does not parse, as evaluate does" do
-      expect { FEELIN.parse('1 +') }.to raise_error(MiniRacer::RuntimeError, /Incomplete <ArithmeticExpression>/)
-      expect { FEELIN.parse('1 + ) 2') }.to raise_error(MiniRacer::RuntimeError, /Unrecognized token/)
+    it "raises on an expression that does not parse" do
+      expect { FEELIN.parse_expression('1 +') }.to raise_error(FEELIN::SyntaxError, /Incomplete <ArithmeticExpression>/)
+      expect { FEELIN.parse_expression('1 + ) 2') }.to raise_error(FEELIN::SyntaxError, /Unrecognized token/)
     end
 
     it "reports a syntax error as evaluate reports it" do
       [ '1 +', '{ a: 1', 'if x then', '1 + ) 2', '1 2', '[1, 2' ].each do |expression|
         expected = begin
           FEELIN.evaluate(expression)
-        rescue MiniRacer::RuntimeError => e
+        rescue FEELIN::SyntaxError => e
           e.message
         end
 
-        expect { FEELIN.parse(expression) }.to raise_error(MiniRacer::RuntimeError, expected), expression
+        expect { FEELIN.parse_expression(expression) }.to raise_error(FEELIN::SyntaxError, expected), expression
       end
     end
   end

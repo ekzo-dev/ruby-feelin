@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [7.0.3] - 2026-10-05
+
+### Changed
+
+* **Breaking:** `FEELIN.parse` is `FEELIN.parse_expression`, after feelin's own `parseExpression`.
+* **Breaking:** errors are the gem's own. A failure inside V8 is raised as `FEELIN::Error` — `FEELIN::SyntaxError` for an expression that does not parse, `FEELIN::TimeoutError` and `FEELIN::MemoryError` for a context's limits — instead of `MiniRacer::RuntimeError`, `MiniRacer::ScriptTerminatedError` and `MiniRacer::V8OutOfMemoryError`. The message names the expression, also available as `error.expression`; `error.reason` is the cause without it. An exception raised by a custom function still passes unwrapped.
+* **Breaking:** a custom function receives a date, a time and a duration as their ISO 8601 strings — the form a result has — instead of a hash of the internal fields of the JavaScript object.
+
 ## [7.0.2] - 2026-10-05
 
 ### Added
