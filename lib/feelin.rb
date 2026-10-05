@@ -4,61 +4,104 @@ require "json"
 module FEELIN
   # Pre-built single-file IIFE bundle (feelin + its dependencies), produced by
   # `npm run build` in lib/feelin/js. It exposes the feelin API on the global
-  # `feel`. feelin is distributed as an ES module, so it is bundled ahead of time
-  # rather than assembled at load time.
+  # `feel`, and under `feel.json` the functions this wrapper calls. feelin is
+  # distributed as an ES module, so it is bundled ahead of time rather than
+  # assembled at load time.
   BUNDLE_PATH = File.expand_path("feelin/js/dist/feelin.js", __dir__)
 
-  @@functions = Set.new
+  # A V8 context with feelin loaded. The module-level methods below work on one
+  # shared context without limits; a context of one's own is for an expression
+  # that is not trusted to end or to stay small — `timeout` (ms) and `max_memory`
+  # (bytes) are MiniRacer's limits, and going over one raises
+  # MiniRacer::ScriptTerminatedError or MiniRacer::V8OutOfMemoryError — and for
+  # custom functions that the shared context should not see.
+  #
+  # Every context starts from one snapshot of the bundle, so creating one does
+  # not load and compile feelin again.
+  #
+  # The context goes into V8 as a JSON string and the result comes back as one
+  # (`feel.json.*` in js/entry.js). That keeps a call a function call with
+  # arguments: the data is never written into a script of its own, which V8 would
+  # compile and keep for every distinct context. And it is how a date, time or
+  # duration arrives as its ISO 8601 string, the form FEEL's `string()` gives
+  # it, instead of the internal fields of the object V8 holds.
+  class Context
+    class << self
+      def snapshot
+        @snapshot ||= MiniRacer::Snapshot.new(File.read(BUNDLE_PATH))
+      end
+    end
 
-  # NOTE: the context is serialized to JSON and interpolated into the eval, rather
-  # than passed as a native Ruby object via MiniRacer#call. That was measured to be
-  # ~15-20% FASTER: JSON.generate (C) plus V8's highly-optimized parsing beats
-  # mini_racer's element-by-element Ruby->V8 marshalling, and it lets custom
-  # functions be injected straight into the context (no per-call merge).
-  def self.evaluate(expression, context = nil)
-    context_json = serialize_context(context)
+    def initialize(timeout: nil, max_memory: nil)
+      limits = { timeout: timeout, max_memory: max_memory }.compact
+      @context = MiniRacer::Context.new(snapshot: self.class.snapshot, **limits)
+    end
 
-    unwrap(@@context.eval("feel.evaluate(#{JSON.generate(expression)}, #{context_json})"))
+    def evaluate(expression, context = nil)
+      call("evaluate", expression, context)
+    end
+
+    def unary_test(expression, value, context = {})
+      call("unaryTest", expression, { **context, '?' => value })
+    end
+
+    # The syntax tree of an expression, without evaluating it: nested hashes of
+    # `type` (the grammar's node name), `from` / `to` (the span in the expression,
+    # counted in UTF-16 code units), `text` (that span) and `children`. Tokens are
+    # nodes too. The context only supplies the names of the variables, which is
+    # what lets a name with spaces in it be read as one. An expression that does
+    # not parse raises, as it does in `evaluate`.
+    def parse(expression, context = nil)
+      call("parseExpression", expression, context)
+    end
+
+    def parse_unary_tests(expression, context = nil)
+      call("parseUnaryTests", expression, context)
+    end
+
+    def add_function(name, proc)
+      @context.attach(name, proc)
+      @context.call("feel.json.addFunction", name)
+    end
+
+    def dispose
+      @context.dispose
+    end
+
+    private
+
+    def call(function, expression, context)
+      JSON.parse(@context.call("feel.json.#{function}", expression, context.nil? ? nil : JSON.generate(context)))
+    end
   end
 
-  def self.unary_test(expression, value, context = {})
-    context_json = serialize_context({ **context, '?' => value })
+  class << self
+    def evaluate(expression, context = nil)
+      shared.evaluate(expression, context)
+    end
 
-    unwrap(@@context.eval("feel.unaryTest(#{JSON.generate(expression)}, #{context_json})"))
+    def unary_test(expression, value, context = {})
+      shared.unary_test(expression, value, context)
+    end
+
+    def parse(expression, context = nil)
+      shared.parse(expression, context)
+    end
+
+    def parse_unary_tests(expression, context = nil)
+      shared.parse_unary_tests(expression, context)
+    end
+
+    def add_function(name, proc)
+      shared.add_function(name, proc)
+    end
+
+    private
+
+    def shared
+      @shared
+    end
   end
 
-  def self.add_function(name, proc)
-    @@functions.add(name)
-    @@context.attach(name, proc)
-  end
-
-  private
-
-  # feelin (>= 7) returns an EvaluationResult `{ value, warnings }`; callers expect
-  # the bare value.
-  def self.unwrap(result)
-    result.is_a?(Hash) && result.key?("warnings") ? result["value"] : result
-  end
-
-  # Builds the JS evaluation context. When custom functions are registered they
-  # must be injected into every context as forwarders to their attached globals.
-  # Each function is emitted as a QUOTED key forwarding to globalThis[name] so
-  # that names containing spaces (e.g. "string join") are valid JS; an empty
-  # context is coerced to nil to avoid producing an invalid "{,...}" literal. The
-  # `(...args)` forwarder is deliberate: feelin reads a function's source to learn
-  # its parameters, so a bare reference to the (native) attached global would be
-  # seen as taking no arguments.
-  def self.serialize_context(context)
-    return JSON.generate(context) if @@functions.empty?
-
-    context = nil if context.respond_to?(:empty?) && context.empty?
-    functions_json = @@functions.map do |name|
-      %("#{name}":function(...args){return globalThis["#{name}"](...args)})
-    end.join(",")
-
-    context.nil? ? "{#{functions_json}}" : "#{JSON.generate(context)[0...-1]},#{functions_json}}"
-  end
-
-  @@context = MiniRacer::Context.new
-  @@context.eval(File.read(BUNDLE_PATH))
+  @shared = Context.new
 end

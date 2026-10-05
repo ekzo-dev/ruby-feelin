@@ -4,7 +4,7 @@
     "build": "esbuild entry.js --bundle --format=iife --global-name=feel --platform=browser --outfile=dist/feelin.js"
   },
   "dependencies": {
-    "feelin": "^7.0.1"
+    "feelin": "^7.0.2"
   },
   "devDependencies": {
     "esbuild": "^0.28.1"
